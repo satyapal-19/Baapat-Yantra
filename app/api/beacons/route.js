@@ -46,16 +46,19 @@ export async function GET(req) {
       query.severity = severityFilter;
     }
 
-    // Project only the fields needed for the map — never expose session IDs
-    const beacons = await NoiseReport.find(query)
+    let findQuery = NoiseReport.find(query)
       .select(
         '_id avgDecibel peakDecibel violationDurationSeconds severity categoryTag ' +
         'zoneCategory location isNighttime festivalContext highCourtRelevant ' +
         'verification.status verification.confirmVotes verification.falsePositiveVotes ' +
         'audioSnippetUrl recordedAt'
-      )
-      .limit(200)
-      .lean();
+      );
+
+    if (!hasCoords) {
+      findQuery = findQuery.sort({ recordedAt: -1 });
+    }
+
+    const beacons = await findQuery.limit(200).lean();
     const sanitizedBeacons = beacons.map(b => ({
       ...b,
       festivalContext: (b.festivalContext && !/ganesh|गणेश/i.test(b.festivalContext)) ? b.festivalContext : null,

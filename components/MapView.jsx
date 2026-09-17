@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 
 // NOTE: Leaflet is imported dynamically inside useEffect (not at module level)
 // because it uses window/document which don't exist during SSR.
@@ -62,16 +62,19 @@ export default function MapView({ onStatsUpdate }) {
   const mapInstanceRef = useRef(null);
   const markersRef = useRef([]);
   const leafletRef = useRef(null);  // Holds L after dynamic import
+  const [refreshing, setRefreshing] = useState(false);
+  const [toastMsg, setToastMsg] = useState('');
 
-  const loadBeacons = useCallback(async () => {
+  const loadBeacons = useCallback(async (isManualRefresh = false) => {
     if (!mapInstanceRef.current) return;
+    if (isManualRefresh) setRefreshing(true);
 
-    const center = mapInstanceRef.current.getCenter();
-    const url = `/api/beacons?lat=${center.lat}&lng=${center.lng}&radius=150000&status=all`;
+    // Query all beacons across Maharashtra
+    const url = '/api/beacons?status=all';
 
     try {
       const res = await fetch(url);
-      if (!res.ok) return;
+      if (!res.ok) throw new Error('Network response not ok');
       const data = await res.json();
       if (!data || !data.success || !Array.isArray(data.beacons)) return;
 
@@ -136,8 +139,24 @@ export default function MapView({ onStatsUpdate }) {
       if (onStatsUpdate) {
         onStatsUpdate({ severe, warning, verified, total: data.count });
       }
+
+      if (isManualRefresh) {
+        setToastMsg(`✓ ${data.count} बीकन्स अद्यतनित केले`);
+        setTimeout(() => setToastMsg(''), 3000);
+
+        if (markersRef.current.length > 0 && mapInstanceRef.current) {
+          const group = L.featureGroup(markersRef.current);
+          mapInstanceRef.current.fitBounds(group.getBounds().pad(0.3), { maxZoom: 13 });
+        }
+      }
     } catch (e) {
       console.error('Failed to load beacons', e);
+      if (isManualRefresh) {
+        setToastMsg('⚠️ अद्यतनित करण्यात अडचण आली');
+        setTimeout(() => setToastMsg(''), 3000);
+      }
+    } finally {
+      if (isManualRefresh) setRefreshing(false);
     }
   }, [onStatsUpdate]);
 
@@ -192,10 +211,8 @@ export default function MapView({ onStatsUpdate }) {
           }
         }, 200);
 
-        mapInstance.on('moveend', loadBeacons);
-
         // Load beacons immediately for Maharashtra center
-        loadBeacons();
+        loadBeacons(false);
 
         // Optional geolocation with 4s timeout (does not block initial render)
         if (typeof navigator !== 'undefined' && navigator.geolocation) {
@@ -203,7 +220,6 @@ export default function MapView({ onStatsUpdate }) {
             (pos) => {
               if (mapInstanceRef.current) {
                 mapInstanceRef.current.setView([pos.coords.latitude, pos.coords.longitude], 13);
-                loadBeacons();
               }
             },
             () => { /* ignore or keep default center */ },
@@ -230,11 +246,20 @@ export default function MapView({ onStatsUpdate }) {
     <div className="relative w-full h-full">
       <div ref={mapRef} className="w-full h-full" />
       {/* Map overlay controls */}
-      <div className="absolute top-3 right-3 z-[999] flex flex-col gap-2">
-        <button onClick={loadBeacons}
-          className="glass-card border border-orange-200 px-3 py-2 rounded-xl text-xs font-devanagari text-orange-700 hover:bg-orange-50 shadow-sm transition-all">
-          🔄 नकाशा ताजा करा
+      <div className="absolute top-3 right-3 z-[1001] flex flex-col items-end gap-2 pointer-events-auto">
+        <button
+          type="button"
+          onClick={() => loadBeacons(true)}
+          disabled={refreshing}
+          className="glass-card border border-orange-200 px-3.5 py-2 rounded-xl text-xs font-devanagari text-orange-700 bg-white/95 hover:bg-orange-50 shadow-md transition-all flex items-center gap-1.5 active:scale-95 disabled:opacity-60 cursor-pointer">
+          <span className={refreshing ? 'animate-spin inline-block' : ''}>🔄</span>
+          <span>{refreshing ? 'ताजा होत आहे...' : 'नकाशा ताजा करा'}</span>
         </button>
+        {toastMsg && (
+          <div className="bg-stone-900/90 text-stone-100 text-[11px] font-devanagari px-3 py-1.5 rounded-lg shadow-lg border border-stone-700 backdrop-blur-sm">
+            {toastMsg}
+          </div>
+        )}
       </div>
     </div>
   );

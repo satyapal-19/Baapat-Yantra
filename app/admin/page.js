@@ -16,7 +16,7 @@ export default function AdminPage() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  const loadReports = useCallback(async (key = adminKey, status = filter) => {
+  const loadReports = useCallback(async (key, status = 'all') => {
     if (!key) return;
     setLoading(true);
     try {
@@ -29,23 +29,33 @@ export default function AdminPage() {
       if (data.success) {
         setReports(data.reports);
         setIsAuthed(true);
-        localStorage.setItem('bapat_admin_key', key);
+        try {
+          localStorage.setItem('bapat_admin_key', key);
+        } catch {}
       } else {
         showToast(data.error || 'Authentication failed', 'error');
-        if (res.status === 401) setIsAuthed(false);
+        if (res.status === 401) {
+          setIsAuthed(false);
+          try {
+            localStorage.removeItem('bapat_admin_key');
+          } catch {}
+        }
       }
     } catch (e) {
       showToast('Error connecting to server: ' + e.message, 'error');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-  }, [adminKey, filter]);
+  }, []);
 
   useEffect(() => {
-    const saved = localStorage.getItem('bapat_admin_key');
-    if (saved) {
-      setAdminKey(saved);
-      loadReports(saved, 'all');
-    }
+    try {
+      const saved = localStorage.getItem('bapat_admin_key');
+      if (saved) {
+        setAdminKey(saved);
+        loadReports(saved, 'all');
+      }
+    } catch {}
   }, [loadReports]);
 
   const updateStatus = async (reportId, newStatus) => {
@@ -165,7 +175,12 @@ export default function AdminPage() {
             ← View Public App
           </a>
           <button
-            onClick={() => { localStorage.removeItem('bapat_admin_key'); setIsAuthed(false); }}
+            onClick={() => {
+              try { localStorage.removeItem('bapat_admin_key'); } catch {}
+              setAdminKey('');
+              setIsAuthed(false);
+              setReports([]);
+            }}
             className="px-4 py-2 rounded-xl bg-red-950 border border-red-800 hover:bg-red-900 text-xs font-semibold text-red-300">
             Logout
           </button>
