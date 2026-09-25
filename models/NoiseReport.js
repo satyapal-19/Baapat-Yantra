@@ -12,6 +12,10 @@ const NoiseReportSchema = new mongoose.Schema({
   peakDecibel: { type: Number, required: true },
   violationDurationSeconds: { type: Number, required: true, min: 0, max: 60 },
   clipDurationSeconds: { type: Number, default: 60, min: 1, max: 60 },
+  laMin: { type: Number, default: null },
+  laMax: { type: Number, default: null },
+  l10: { type: Number, default: null },
+  l90: { type: Number, default: null },
 
   // Classification
   severity: {

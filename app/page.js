@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHand
 import dynamic from 'next/dynamic';
 import { getLegalLimit, classifySeverity, SEVERITY_LABELS, ZONE_LABELS } from '@/utils/noiseThresholds';
 import { classifyNoiseProbability, aggregateCategory } from '@/utils/frequencyClassifier';
-import { DecibelMeter, getCalibrationOffset } from '@/utils/decibelMeter';
+import { DecibelMeter, getCalibrationOffset, THIRD_OCTAVE_BANDS } from '@/utils/decibelMeter';
 
 // ── Leaflet map loaded client-side only (no SSR) ──────────────────────────────
 const MapView = dynamic(() => import('@/components/MapView'), { ssr: false, loading: () => (
@@ -106,7 +106,7 @@ function QuoteCarousel() {
   );
 }
 
-function DbGauge({ leq, instantDb, limit, stats }) {
+function DbGauge({ leq, instantDb, limit, stats, laMax, laMin }) {
   const mainDb = leq || instantDb || 0;
   const pct = Math.min(100, (mainDb / 120) * 100);
   const color = dbColor(mainDb);
@@ -118,8 +118,6 @@ function DbGauge({ leq, instantDb, limit, stats }) {
   // Limit marker angle
   const limitAngle = ((limit / 120) * 360) - 90; // degrees from top
   const limitRad = (limitAngle * Math.PI) / 180;
-  const lx = 70 + r * Math.cos(limitRad);
-  const ly = 70 + r * Math.sin(limitRad);
 
   return (
     <div className="flex flex-col items-center gap-3">
@@ -144,22 +142,20 @@ function DbGauge({ leq, instantDb, limit, stats }) {
             style={{ transformOrigin: '70px 70px' }} />
 
           {/* Leq label top */}
-          <text x="70" y="52" textAnchor="middle" fill="#78716c" fontSize="9" fontWeight="600" letterSpacing="1">
-            Leq dB(A)
+          <text x="70" y="50" textAnchor="middle" fill="#78716c" fontSize="8" fontWeight="700" letterSpacing="1">
+            LAeq,t (CPCB)
           </text>
           {/* Main Leq number */}
           <text x="70" y="76" textAnchor="middle" fill={color} fontSize="30" fontWeight="bold" fontFamily="monospace">
             {mainDb || '--'}
           </text>
           {/* Instant dB secondary */}
-          {instantDb && instantDb !== mainDb && (
-            <text x="70" y="91" textAnchor="middle" fill="#92400e" fontSize="11" fontFamily="monospace">
-              ↑ {instantDb} inst.
-            </text>
-          )}
+          <text x="70" y="91" textAnchor="middle" fill="#92400e" fontSize="10" fontFamily="monospace">
+            {instantDb ? `LAeq,1s: ${instantDb} dB` : '--'}
+          </text>
           {/* Limit label */}
-          <text x="70" y="106" textAnchor="middle" fill="#c2410c" fontSize="10">
-            Limit: {limit} dB
+          <text x="70" y="106" textAnchor="middle" fill="#c2410c" fontSize="9">
+            मर्यादा: {limit} dB
           </text>
         </svg>
 
@@ -168,6 +164,16 @@ function DbGauge({ leq, instantDb, limit, stats }) {
           <div className="absolute inset-0 rounded-full animate-ping opacity-20"
             style={{ background: `radial-gradient(circle, ${color}, transparent)` }} />
         )}
+      </div>
+
+      {/* LAmin and LAmax pill badges */}
+      <div className="flex items-center gap-2 text-xs">
+        <span className="px-2.5 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700 font-mono text-[11px] flex items-center gap-1">
+          <span className="text-blue-500 font-bold">▼ LAmin:</span> {laMin ? `${laMin} dB` : '--'}
+        </span>
+        <span className="px-2.5 py-0.5 rounded-full bg-red-50 border border-red-200 text-red-700 font-mono text-[11px] flex items-center gap-1">
+          <span className="text-red-500 font-bold">▲ LAmax:</span> {laMax ? `${laMax} dB` : '--'}
+        </span>
       </div>
 
       {/* L10 / L50 / L90 stats strip */}
@@ -185,6 +191,116 @@ function DbGauge({ leq, instantDb, limit, stats }) {
             </div>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+function ThirdOctaveSpectrumVisualizer({ thirdOctaveBands, overviewBands, mode, setMode, dominantFreq, dominantBandLabel }) {
+  return (
+    <div className="bg-white rounded-2xl p-4 border border-orange-100 shadow-sm">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <span className="font-semibold text-xs text-stone-700">ध्वनी स्पेक्ट्रम विश्लेषण</span>
+          <span className="text-[10px] text-stone-400 ml-1.5 font-mono">IEC 61260 1/3 Octave</span>
+        </div>
+        <div className="flex items-center gap-1 bg-stone-100 p-0.5 rounded-lg text-[10px]">
+          <button
+            type="button"
+            onClick={() => setMode('32bands')}
+            className={`px-2 py-0.5 rounded-md font-medium transition ${
+              mode === '32bands' ? 'bg-orange-600 text-white shadow-xs' : 'text-stone-600 hover:text-stone-900'
+            }`}>
+            ३२ बँड्स
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('4bands')}
+            className={`px-2 py-0.5 rounded-md font-medium transition ${
+              mode === '4bands' ? 'bg-orange-600 text-white shadow-xs' : 'text-stone-600 hover:text-stone-900'
+            }`}>
+            ४ बँड्स
+          </button>
+        </div>
+      </div>
+
+      {mode === '32bands' ? (
+        <div>
+          {/* Sub-bass violation banner */}
+          <div className="flex justify-between items-center text-[10px] text-stone-400 mb-1 px-1">
+            <span className="text-red-600 font-semibold flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block animate-pulse"></span>
+              तीव्र बेस क्षेत्र (Sub-Bass: 31.5–100 Hz)
+            </span>
+            <span>20 Hz – 20 kHz</span>
+          </div>
+
+          <div className="flex items-end gap-0.5 sm:gap-1 h-20 w-full justify-between bg-stone-50/80 p-2 rounded-xl border border-stone-100 overflow-x-auto">
+            {THIRD_OCTAVE_BANDS.map((b, idx) => {
+              const val = thirdOctaveBands[idx] || 0;
+              const heightPct = Math.max(5, Math.min(100, (val / 100) * 100));
+              const isSubBass = idx >= 3 && idx <= 8; // 31.5 - 100 Hz
+              const isMid = idx >= 9 && idx <= 20; // 125 - 1.6k Hz
+              const barColor = isSubBass
+                ? val > 65 ? '#dc2626' : '#ea580c'
+                : isMid
+                ? '#f97316'
+                : '#0284c7';
+
+              return (
+                <div key={b.center} className="flex-1 flex flex-col items-center min-w-[6px] h-full justify-end group relative" title={`${b.center} Hz: ${val} dB`}>
+                  <div
+                    className="w-full rounded-t-sm transition-all duration-200"
+                    style={{
+                      height: `${heightPct}%`,
+                      backgroundColor: barColor,
+                      opacity: val > 0 ? 0.85 : 0.25,
+                    }}
+                  />
+                  <div className="absolute -top-7 left-1/2 -translate-x-1/2 hidden group-hover:flex bg-stone-900 text-white text-[9px] px-1.5 py-0.5 rounded shadow whitespace-nowrap z-20 pointer-events-none">
+                    {b.label}Hz: {val}dB
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex justify-between text-[9px] text-stone-400 mt-1 px-1 font-mono">
+            <span>16Hz</span>
+            <span className="text-red-600 font-bold">63Hz</span>
+            <span>250Hz</span>
+            <span>1kHz</span>
+            <span>4kHz</span>
+            <span>16kHz</span>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-end gap-2 h-14 justify-center">
+          {[
+            { label: 'Sub Bass\n20–120Hz', value: overviewBands.subBass, note: 'Low Bass' },
+            { label: 'Bass\n120–500Hz', value: overviewBands.bass, note: 'Harmonics' },
+            { label: 'Mid\n500Hz–2kHz', value: overviewBands.mid, note: 'Speech' },
+            { label: 'High\n2–8kHz', value: overviewBands.high, note: 'Treble' },
+          ].map((b, i) => (
+            <div key={i} className="flex flex-col items-center flex-1 gap-1">
+              <div className="w-full rounded-t-lg transition-all duration-300"
+                style={{
+                  height: `${Math.max(4, (b.value / 100) * 56)}px`,
+                  background: i < 2
+                    ? `rgba(239,68,68,${0.4 + (b.value / 100) * 0.6})`
+                    : `rgba(249,115,22,${0.3 + (b.value / 100) * 0.5})`,
+                }} />
+              <span className="text-xs text-stone-400 whitespace-pre-line text-center leading-none" style={{ fontSize: '9px' }}>{b.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(dominantBandLabel || dominantFreq) && (
+        <p className="text-center text-xs text-orange-600 mt-2">
+          🎵 प्रमुख वारंवारता: <strong>{dominantBandLabel || `${dominantFreq} Hz`}</strong>
+          {dominantFreq > 40 && dominantFreq < 120 ? ' — तीव्र बेस श्रेणी (Sub-Bass Wall)' : ''}
+        </p>
       )}
     </div>
   );
@@ -216,6 +332,10 @@ const NoiseRecorder = forwardRef(function NoiseRecorder({ onReportSubmitted }, r
   const [stats, setStats] = useState({ L10: 0, L50: 0, L90: 0, peak: 0 });
   const [noiseFloor, setNoiseFloor] = useState(null);
   const [bandLevels, setBandLevels] = useState({ subBass: 0, bass: 0, mid: 0, high: 0 });
+  const [thirdOctaveBands, setThirdOctaveBands] = useState(new Array(32).fill(0));
+  const [spectrumMode, setSpectrumMode] = useState('32bands');
+  const [laExtremes, setLaExtremes] = useState({ laMin: null, laMax: null });
+  const [dominantBandLabel, setDominantBandLabel] = useState(null);
 
   const [violationSeconds, setViolationSeconds] = useState(0);
   const [severity, setSeverity] = useState('normal');
@@ -253,7 +373,7 @@ const NoiseRecorder = forwardRef(function NoiseRecorder({ onReportSubmitted }, r
     setTimeout(async () => {
       const meter = meterRef.current;
       const finalLeq    = meter ? meter.getLeq() : 0;
-      const finalStats  = meter ? meter.getStatistics() : { L10: 0, L50: 0, L90: 0, peak: 0 };
+      const finalStats  = meter ? meter.getStatistics() : { L10: 0, L50: 0, L90: 0, peak: 0, laMin: null, laMax: null };
       const finalSev    = classifySeverity(violationSecondsRef.current);
       const finalCat    = aggregateCategory(secondReadingsRef.current);
 
@@ -308,6 +428,10 @@ const NoiseRecorder = forwardRef(function NoiseRecorder({ onReportSubmitted }, r
           audioData: audioUrl,
           bassRatio: secondReadingsRef.current[0]?.bassRatio || null,
           suggestedCategory: finalCat,
+          laMin: finalStats.laMin != null ? finalStats.laMin : null,
+          laMax: finalStats.laMax != null ? finalStats.laMax : null,
+          l10: finalStats.L10 != null ? finalStats.L10 : null,
+          l90: finalStats.L90 != null ? finalStats.L90 : null,
         };
 
         const res = await fetch('/api/report', {
@@ -330,6 +454,8 @@ const NoiseRecorder = forwardRef(function NoiseRecorder({ onReportSubmitted }, r
             l10: finalStats.L10,
             l90: finalStats.L90,
             peak: finalStats.peak,
+            laMin: finalStats.laMin,
+            laMax: finalStats.laMax,
             vSec: violationSecondsRef.current,
             finalCategory: finalCat,
           });
@@ -466,14 +592,20 @@ const NoiseRecorder = forwardRef(function NoiseRecorder({ onReportSubmitted }, r
       setNoiseFloor(null);
       setStats({ L10: 0, L50: 0, L90: 0, peak: 0 });
       setBandLevels({ subBass: 0, bass: 0, mid: 0, high: 0 });
+      setThirdOctaveBands(new Array(32).fill(0));
+      setLaExtremes({ laMin: null, laMax: null });
+      setDominantBandLabel(null);
 
       // ── 5. Fast display update (250ms) — smooth UI animation ───────────────
       fastIntervalRef.current = setInterval(() => {
         if (!meterRef.current) return;
-        const idb = Math.round(meterRef.current.getInstantaneousDB());
-        setInstantDb(idb);
-        const bands = meterRef.current.getBandLevels();
-        setBandLevels(bands);
+        const frame = meterRef.current.getAcousticFrame();
+        setInstantDb(Math.round(frame.splA));
+        setBandLevels(frame.overviewBands);
+        setThirdOctaveBands(frame.thirdOctaveLevels);
+        if (frame.dominantBand?.label) {
+          setDominantBandLabel(`${frame.dominantBand.label} Hz`);
+        }
       }, 250);
 
       // ── 6. Main 1-second measurement tick ──────────────────────────────────
@@ -498,6 +630,7 @@ const NoiseRecorder = forwardRef(function NoiseRecorder({ onReportSubmitted }, r
         // Update display
         setLeqDb(currentLeq);
         setStats(currentStats);
+        setLaExtremes({ laMin: reading.laMin, laMax: reading.laMax });
         if (cls.fundamentalHz > 0) setFundamentalHz(Math.round(cls.fundamentalHz));
 
         // Violation check (against Leq — legally correct metric)
@@ -573,6 +706,10 @@ const NoiseRecorder = forwardRef(function NoiseRecorder({ onReportSubmitted }, r
     setBrowserWarning(false);
     setStats({ L10: 0, L50: 0, L90: 0, peak: 0 });
     setNoiseFloor(null);
+    setBandLevels({ subBass: 0, bass: 0, mid: 0, high: 0 });
+    setThirdOctaveBands(new Array(32).fill(0));
+    setLaExtremes({ laMin: null, laMax: null });
+    setDominantBandLabel(null);
     violationSecondsRef.current = 0;
     if (intervalRef.current) clearInterval(intervalRef.current);
     if (fastIntervalRef.current) clearInterval(fastIntervalRef.current);
@@ -695,39 +832,26 @@ const NoiseRecorder = forwardRef(function NoiseRecorder({ onReportSubmitted }, r
 
                 {/* dB Gauge with Leq, instant, and L10/L50/L90 */}
                 <div className="flex-1">
-                  <DbGauge leq={leqDb} instantDb={instantDb} limit={limit} stats={elapsed >= 5 ? stats : null} />
+                  <DbGauge
+                    leq={leqDb}
+                    instantDb={instantDb}
+                    limit={limit}
+                    stats={elapsed >= 5 ? stats : null}
+                    laMax={laExtremes.laMax}
+                    laMin={laExtremes.laMin}
+                  />
                 </div>
               </div>
 
-              {/* Frequency band visualizer bars */}
-              <div className="bg-white rounded-2xl p-4 border border-orange-100">
-                <p className="text-xs text-stone-400 mb-2 text-center">आवाज आवृत्ती विश्लेषण — Frequency Band Analysis</p>
-                <div className="flex items-end gap-2 h-14 justify-center">
-                  {[
-                    { label: 'Sub Bass\n20–120Hz', value: bandLevels.subBass, note: 'Low Bass' },
-                    { label: 'Bass\n120–500Hz', value: bandLevels.bass, note: 'Harmonics' },
-                    { label: 'Mid\n500Hz–2kHz', value: bandLevels.mid, note: 'Speech' },
-                    { label: 'High\n2–8kHz', value: bandLevels.high, note: 'Treble' },
-                  ].map((b, i) => (
-                    <div key={i} className="flex flex-col items-center flex-1 gap-1">
-                      <div className="w-full rounded-t-lg transition-all duration-300"
-                        style={{
-                          height: `${Math.max(4, (b.value / 100) * 56)}px`,
-                          background: i < 2
-                            ? `rgba(239,68,68,${0.4 + (b.value / 100) * 0.6})`
-                            : `rgba(249,115,22,${0.3 + (b.value / 100) * 0.5})`,
-                        }} />
-                      <span className="text-xs text-stone-400 whitespace-pre-line text-center leading-none" style={{ fontSize: '9px' }}>{b.label}</span>
-                    </div>
-                  ))}
-                </div>
-                {fundamentalHz && (
-                  <p className="text-center text-xs text-orange-600 mt-2">
-                    🎵 मूल आवृत्ती: <strong>{fundamentalHz} Hz</strong>
-                    {fundamentalHz > 60 && fundamentalHz < 200 ? ' — Low Bass Range' : ''}
-                  </p>
-                )}
-              </div>
+              {/* Third Octave Spectrum Visualizer */}
+              <ThirdOctaveSpectrumVisualizer
+                thirdOctaveBands={thirdOctaveBands}
+                overviewBands={bandLevels}
+                mode={spectrumMode}
+                setMode={setSpectrumMode}
+                dominantFreq={fundamentalHz}
+                dominantBandLabel={dominantBandLabel}
+              />
 
               {/* Wave visualizer + noise floor */}
               <div className="flex items-center justify-between px-2">
@@ -810,6 +934,22 @@ const NoiseRecorder = forwardRef(function NoiseRecorder({ onReportSubmitted }, r
                   <div className="text-6xl">✅</div>
                   <p className="font-devanagari text-2xl text-green-700 font-bold">{result.message}</p>
                   <p className="text-stone-400 text-sm">No sustained violation detected. Thank you for checking!</p>
+                  <div className="glass-card rounded-2xl p-4 text-left space-y-2 text-sm max-w-sm mx-auto">
+                    <div className="flex justify-between items-center border-b border-orange-100 pb-2 mb-1">
+                      <span className="text-stone-500">Leq dB(A) (सरासरी)</span>
+                      <span className="font-bold text-green-700 font-mono text-lg">{result.leq} dB</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-center pt-1">
+                      <div className="bg-blue-50/70 rounded-lg p-2 border border-blue-100">
+                        <div className="font-bold text-blue-700 font-mono">{result.laMin != null ? `${result.laMin} dB` : '—'}</div>
+                        <div className="text-xs text-stone-400">LAmin</div>
+                      </div>
+                      <div className="bg-red-50/70 rounded-lg p-2 border border-red-100">
+                        <div className="font-bold text-red-700 font-mono">{result.laMax != null ? `${result.laMax} dB` : '—'}</div>
+                        <div className="text-xs text-stone-400">LAmax</div>
+                      </div>
+                    </div>
+                  </div>
                 </>
               ) : (
                 <>
@@ -837,6 +977,16 @@ const NoiseRecorder = forwardRef(function NoiseRecorder({ onReportSubmitted }, r
                       <div className="bg-green-50 rounded-lg p-2">
                         <div className="font-bold text-green-600 font-mono">{result.l90 || '—'}</div>
                         <div className="text-xs text-stone-400">L90 (Floor)</div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-center pt-1">
+                      <div className="bg-blue-50/70 rounded-lg p-2 border border-blue-100">
+                        <div className="font-bold text-blue-700 font-mono">{result.laMin != null ? `${result.laMin} dB` : '—'}</div>
+                        <div className="text-xs text-stone-400">LAmin (न्यूनतम)</div>
+                      </div>
+                      <div className="bg-red-50/70 rounded-lg p-2 border border-red-100">
+                        <div className="font-bold text-red-700 font-mono">{result.laMax != null ? `${result.laMax} dB` : '—'}</div>
+                        <div className="text-xs text-stone-400">LAmax (कमाल)</div>
                       </div>
                     </div>
                     <div className="flex justify-between"><span className="text-stone-500">उच्चतम dB(A)</span><span className="font-bold text-red-600 font-mono">{result.peak} dB</span></div>
